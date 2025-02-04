@@ -1,0 +1,48 @@
+import { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
+
+interface JwtPayload {
+  id: string;
+  // Add other fields from your JWT payload if needed
+}
+
+export const authMiddleware = (req: Request, res: Response, next: NextFunction) => {
+  const authHeader = req.header('Authorization');
+  
+  if (!authHeader) {
+    return res.status(401).json({ error: 'Authorization header is missing' });
+  }
+
+  const token = authHeader.replace('Bearer ', '');
+
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  try {
+    if (!process.env.JWT_SECRET) {
+      throw new Error('JWT_SECRET is not defined in environment');
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET) as JwtPayload;
+    
+    if (!decoded.id) {
+      return res.status(401).json({ error: 'Invalid token payload' });
+    }
+
+    req.user = { id: decoded.id };
+    next();
+  } catch (error) {
+    console.error('Authentication error:', error);
+    
+    if (error instanceof jwt.TokenExpiredError) {
+      return res.status(401).json({ error: 'Token has expired' });
+    }
+    
+    if (error instanceof jwt.JsonWebTokenError) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+    
+    return res.status(500).json({ error: 'Internal server error during authentication' });
+  }
+};

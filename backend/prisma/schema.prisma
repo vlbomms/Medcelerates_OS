@@ -1,0 +1,82 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id               String   @id @default(uuid())
+  email            String   @unique
+  password         String
+  isPaidMember     Boolean  @default(false)
+  stripeCustomerId String?  @unique
+  stripePaymentIntentId String?  @unique
+  
+  // New fields for refresh token management
+  refreshToken     String?  // Store the latest refresh token
+  refreshTokenIssuedAt DateTime?
+  refreshTokenExpiresAt DateTime?
+  
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tests            Test[]
+}
+
+model Test {
+  id            String        @id @default(uuid())
+  testId        String        // e.g., a short unique code for display
+  userId        String
+  user          User          @relation(fields: [userId], references: [id])
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  status        TestStatus    @default(IN_PROGRESS)
+  testQuestions TestQuestion[]
+  timeLeftSeconds Int?
+}
+
+enum TestStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
+model TestQuestion {
+  id         String    @id @default(uuid())
+  testId     String
+  test       Test      @relation(fields: [testId], references: [id])
+  questionId String
+  question   Question  @relation(fields: [questionId], references: [id])
+  userAnswer String?   // the user's chosen answer
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
+
+model Question {
+  id                String   @id // can be your 12-char question ID or "P..." for passages
+  subject           String?
+  unit              String?
+  isPassage         Boolean  // true if this is a passage
+  passageId         String?  // references a passage if this is a sub-question
+
+  // If isPassage = true, store the passage text here
+  passageHtml       String?
+
+  // For standalone or sub-questions
+  questionHtml      String?  // question stem
+  answerChoicesHtml String?  // contains all choices + correct one marked data-correct="true"
+  explanationHtml   String?  // explanation shown post-submission
+
+  // Store images if needed (base64 or references)
+  images            Json?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  // Passage relationship
+  parentPassage   Question?  @relation("PassageQuestions", fields: [passageId], references: [id])
+  subQuestions    Question[] @relation("PassageQuestions")
+  TestQuestion    TestQuestion[]
+}
