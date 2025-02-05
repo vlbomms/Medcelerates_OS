@@ -18,6 +18,7 @@ const RegisterForm: React.FC = () => {
   const [wantSubscription, setWantSubscription] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [subscriptionLength, setSubscriptionLength] = useState<'ONE_MONTH' | 'THREE_MONTHS'>('ONE_MONTH');
 
   const dispatch = useDispatch();
   const navigate = useNavigate();
@@ -37,52 +38,63 @@ const RegisterForm: React.FC = () => {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError('');
     setIsLoading(true);
-
-    // Validate inputs and card details
-    if (password !== confirmPassword) {
-      setError('Passwords do not match');
-      setIsLoading(false);
-      return;
-    }
-
-    // Validate Stripe Elements
-    let paymentMethodId: string | undefined;
-    if (wantSubscription) {
-      if (!stripe || !elements) {
-        setError('Payment processing is not initialized');
-        setIsLoading(false);
-        return;
-      }
-
-      const cardElement = elements.getElement(CardElement);
-      
-      if (!cardElement) {
-        setError('Please enter your card details');
-        setIsLoading(false);
-        return;
-      }
-
-      // Create payment method before navigation
-      const { error, paymentMethod } = await stripe.createPaymentMethod({
-        type: 'card',
-        card: cardElement,
-        billing_details: { email }
-      });
-
-      if (error) {
-        setError(error.message || 'Invalid card details');
-        setIsLoading(false);
-        return;
-      }
-
-      paymentMethodId = paymentMethod?.id;
-    }
+    setError('');
 
     try {
+      // Explicitly convert and type subscription length
+      const processedSubscriptionLength: SubscriptionLength = 
+        subscriptionLength === 'THREE_MONTHS'
+          ? 'THREE_MONTHS'
+          : 'ONE_MONTH';
+
+      // Validate inputs and card details
+      if (password !== confirmPassword) {
+        setError('Passwords do not match');
+        setIsLoading(false);
+        return;
+      }
+
+      // Validate Stripe Elements
+      let paymentMethodId: string | undefined;
+      if (wantSubscription) {
+        if (!stripe || !elements) {
+          setError('Payment processing is not initialized');
+          setIsLoading(false);
+          return;
+        }
+
+        const cardElement = elements.getElement(CardElement);
+        
+        if (!cardElement) {
+          setError('Please enter your card details');
+          setIsLoading(false);
+          return;
+        }
+
+        // Create payment method before navigation
+        const { error, paymentMethod } = await stripe.createPaymentMethod({
+          type: 'card',
+          card: cardElement,
+          billing_details: { email }
+        });
+
+        if (error) {
+          setError(error.message || 'Invalid card details');
+          setIsLoading(false);
+          return;
+        }
+
+        paymentMethodId = paymentMethod?.id;
+      }
+
       // Register user
-      const { token, user, refreshToken } = await authService.register(email, password);
+      const { token, user, refreshToken } = await authService.register(
+        email, 
+        password, 
+        wantSubscription ? processedSubscriptionLength : undefined,
+        wantSubscription ? 'ONE_TIME' : undefined
+      );
       
       dispatch(login({
         user: {
@@ -91,13 +103,28 @@ const RegisterForm: React.FC = () => {
           isPaidMember: user.isPaidMember
         },
         token,
-        refreshToken
+        refreshToken,
+        subscriptionDetails: {
+          status: wantSubscription ? 'ACTIVE_PAID' : 'NO_SUBSCRIPTION',
+          canExtend: true,
+          canPurchase: true,
+          subscriptionEndDate: wantSubscription 
+            ? new Date(Date.now() + getSubscriptionDays(processedSubscriptionLength) * 24 * 60 * 60 * 1000).toISOString() 
+            : null,
+          ...(wantSubscription ? {} : {
+            trialStartDate: undefined,
+            trialEndDate: undefined
+          })
+        }
       }));
 
       // Process subscription if selected
       if (wantSubscription && paymentMethodId) {
         try {
-          await authService.createOneTimePayment(paymentMethodId);
+          await authService.createOneTimePayment(
+            paymentMethodId, 
+            processedSubscriptionLength
+          );
         } catch (subscriptionError: any) {
           // Log the detailed error
           console.error('One-time Payment creation error:', subscriptionError);
@@ -122,10 +149,6 @@ const RegisterForm: React.FC = () => {
         } 
       });
     } catch (registrationError: any) {
-      // More detailed error handling for registration
-      console.error('Registration error:', registrationError);
-      
-      // Set the specific error message
       setError(registrationError.message);
       setIsLoading(false);
     }
@@ -135,6 +158,18 @@ const RegisterForm: React.FC = () => {
   if (isAuthenticated && token && !isTokenExpired(token)) {
     return null;
   }
+
+  // Define a type for subscription length
+  type SubscriptionLength = 'ONE_MONTH' | 'THREE_MONTHS';
+
+  // Add a helper function to convert subscription length to days
+  const getSubscriptionDays = (length: SubscriptionLength): number => {
+    switch (length) {
+      case 'ONE_MONTH': return 30;
+      case 'THREE_MONTHS': return 90;
+      default: return 30;
+    }
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -183,6 +218,20 @@ const RegisterForm: React.FC = () => {
               I want to subscribe to premium features
             </label>
           </div>
+
+          {/* Subscription Length */}
+          {wantSubscription && (
+            <div>
+              <label>Subscription Length:</label>
+              <select 
+                value={subscriptionLength}
+                onChange={(e) => setSubscriptionLength(e.target.value as 'ONE_MONTH' | 'THREE_MONTHS')}
+              >
+                <option value="ONE_MONTH">1 Month</option>
+                <option value="THREE_MONTHS">3 Months</option>
+              </select>
+            </div>
+          )}
 
           {/* Stripe Card Element */}
           {wantSubscription && (

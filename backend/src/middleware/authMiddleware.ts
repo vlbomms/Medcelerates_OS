@@ -6,17 +6,19 @@ interface JwtPayload {
   // Add other fields from your JWT payload if needed
 }
 
-export const authMiddleware = (req: Request, res: Response, next: NextFunction) => {
+export const authenticateToken = (req: Request, res: Response, next: NextFunction): void => {
   const authHeader = req.header('Authorization');
   
   if (!authHeader) {
-    return res.status(401).json({ error: 'Authorization header is missing' });
+    res.status(401).json({ error: 'Authorization header is missing' });
+    return;
   }
 
   const token = authHeader.replace('Bearer ', '');
 
   if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
+    res.status(401).json({ error: 'No token provided' });
+    return;
   }
 
   try {
@@ -27,7 +29,8 @@ export const authMiddleware = (req: Request, res: Response, next: NextFunction) 
     const decoded = jwt.verify(token, process.env.JWT_SECRET) as JwtPayload;
     
     if (!decoded.id) {
-      return res.status(401).json({ error: 'Invalid token payload' });
+      res.status(401).json({ error: 'Invalid token payload' });
+      return;
     }
 
     req.user = { id: decoded.id };
@@ -36,13 +39,15 @@ export const authMiddleware = (req: Request, res: Response, next: NextFunction) 
     console.error('Authentication error:', error);
     
     if (error instanceof jwt.TokenExpiredError) {
-      return res.status(401).json({ error: 'Token has expired' });
+      res.status(401).json({ error: 'Token has expired' });
+      return;
     }
     
     if (error instanceof jwt.JsonWebTokenError) {
-      return res.status(401).json({ error: 'Invalid token' });
+      res.status(401).json({ error: 'Invalid token' });
+      return;
     }
     
-    return res.status(500).json({ error: 'Internal server error during authentication' });
+    res.status(500).json({ error: 'Internal server error during authentication' });
   }
 };

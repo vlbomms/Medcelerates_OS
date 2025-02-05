@@ -6,7 +6,7 @@ import { jwtDecode } from 'jwt-decode';
 const API_URL = import.meta.env.VITE_BACKEND_URL;
 
 const api = axios.create({
-  baseURL: `${API_URL}/api`,
+  baseURL: `${API_URL}`,
   withCredentials: true,
 });
 
@@ -26,16 +26,16 @@ export const isTokenExpired = (token: string): boolean => {
 // Token refresh utility
 export const refreshAccessToken = async (refreshToken: string): Promise<string> => {
   try {
-    const response = await axios.post(`${API_URL}/api/auth/refresh-token`, { refreshToken }, {
+    const response = await axios.post(`${API_URL}/auth/refresh-token`, { refreshToken }, {
       withCredentials: true
     });
     
-    const { token, user } = response.data;
+    const { accessToken, refreshToken: newRefreshToken } = response.data;
     
     // Update token in Redux store
-    store.dispatch({ type: 'refreshToken', payload: { token, refreshToken } });
+    store.dispatch({ type: 'refreshToken', payload: { token: accessToken, refreshToken: newRefreshToken } });
     
-    return token;
+    return accessToken;
   } catch (error) {
     // If refresh fails, log out the user
     store.dispatch(logout());
@@ -115,14 +115,20 @@ api.interceptors.response.use(
 
 // Authentication Services
 export const authService = {
-  register: async (email: string, password: string) => {
+  register: async (
+    email: string, 
+    password: string, 
+    subscriptionLength?: 'ONE_MONTH' | 'THREE_MONTHS',
+    subscriptionType: 'ONE_TIME' | 'RECURRING' = 'ONE_TIME'
+  ) => {
     try {
-      const response = await api.post('/auth/register', { email, password });
-      return {
-        user: response.data.user,
-        token: response.data.token,
-        refreshToken: response.data.refreshToken
-      };
+      const response = await api.post('/auth/register', { 
+        email, 
+        password, 
+        subscriptionLength,
+        subscriptionType
+      });
+      return response.data;
     } catch (error: any) {
       // Extract detailed error message
       const errorMessage = error.response?.data?.details 
@@ -135,19 +141,133 @@ export const authService = {
   },
   
   login: async (email: string, password: string) => {
-    const response = await api.post('/auth/login', { email, password });
-    return response.data;
+    try {
+      console.log('Attempting login with:', { email });
+      const response = await api.post('/auth/login', { email, password });
+      
+      console.log('Login response:', response.data);
+      
+      const { 
+        accessToken, 
+        refreshToken, 
+        userId, 
+        email: userEmail, 
+        isPaidMember,
+        subscriptionDetails 
+      } = response.data;
+
+      console.log('Parsed login data:', {
+        userId,
+        userEmail,
+        isPaidMember,
+        hasAccessToken: !!accessToken,
+        hasRefreshToken: !!refreshToken,
+        subscriptionDetails
+      });
+
+      return {
+        token: accessToken,
+        user: {
+          id: userId,
+          email: userEmail,
+          isPaidMember
+        },
+        refreshToken,
+        subscriptionDetails
+      };
+    } catch (error) {
+      console.error('Login error:', error);
+      throw error;
+    }
   },
 
   // Stripe One-time Payment
-  createOneTimePayment: async (paymentMethodId: string) => {
-    const response = await api.post('/stripe/create-subscription', { paymentMethodId });
+  createOneTimePayment: async (
+    paymentMethodId: string, 
+    subscriptionLength: 'ONE_MONTH' | 'THREE_MONTHS'
+  ) => {
+    const response = await api.post('/stripe/create-subscription', { 
+      paymentMethodId, 
+      subscriptionLength 
+    });
     return response.data;
   },
   createCheckoutSession: async () => {
     const response = await api.post('/stripe/create-checkout-session');
     return response.data;
-  }
+  },
+  // Subscription Renewal
+  renewSubscription: async (
+    paymentMethodId: string, 
+    subscriptionLength: 'ONE_MONTH' | 'THREE_MONTHS'
+  ) => {
+    const response = await api.post('/stripe/renew-subscription', { 
+      paymentMethodId: paymentMethodId, 
+      subscriptionLength: subscriptionLength 
+    });
+    return response.data;
+  },
+  // Subscribe to a new subscription
+  subscribe: async (
+    paymentMethodId: string, 
+    subscriptionLength: 'ONE_MONTH' | 'THREE_MONTHS'
+  ) => {
+    const response = await api.post('/stripe/create-subscription', { 
+      paymentMethodId, 
+      subscriptionLength 
+    });
+    return response.data;
+  },
+
+  getMembershipStatus: async () => {
+    try {
+      const response = await api.get('/auth/membership-status');
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching membership status:', error);
+      throw error;
+    }
+  },
+
+  logout: async () => {
+    try {
+      // Call backend logout endpoint
+      await api.post('/auth/logout');
+    } catch (error) {
+      // Silently handle logout errors
+      console.warn('Logout backend call failed');
+    }
+  },
+
+  // Fetch user's subscription status
+  fetchSubscriptionStatus: async () => {
+    try {
+      const response = await api.get('/auth/subscription-status');
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching subscription status', error);
+      throw error;
+    }
+  },
+
+  // Manage subscription (purchase or extend)
+  manageSubscription: async (subscriptionType: string) => {
+    try {
+      const response = await api.post('/auth/manage-subscription', 
+        { subscriptionType }
+      );
+      return response.data;
+    } catch (error) {
+      console.error('Error managing subscription', error);
+      throw error;
+    }
+  },
+};
+
+// Subscription Status
+export const getSubscriptionStatus = async () => {
+  const response = await api.get('/auth/membership-status');
+  return response.data;
 };
 
 export default api;
