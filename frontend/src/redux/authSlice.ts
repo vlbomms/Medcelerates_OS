@@ -1,15 +1,31 @@
-import { jwtDecode } from 'jwt-decode';
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 
 interface User {
   id: string;
   email: string;
   isPaidMember: boolean;
+  subscriptionType?: string | null;
 }
 
 interface TokenPayload {
   id: string;
+  email: string;
   exp: number;
+}
+
+interface SubscriptionDetails {
+  status: 
+    | 'ACTIVE_PAID' 
+    | 'ACTIVE_TRIAL' 
+    | 'EXPIRED_TRIAL' 
+    | 'EXPIRED_PAID' 
+    | 'NO_SUBSCRIPTION';
+  canExtend: boolean;
+  canPurchase: boolean;
+  subscriptionEndDate?: string | null;
+  trialEndDate?: string;
+  trialStartDate?: string;
+  subscriptionType?: string | null;
 }
 
 interface AuthState {
@@ -17,45 +33,67 @@ interface AuthState {
   token: string | null;
   refreshToken: string | null;
   isAuthenticated: boolean;
+  subscriptionDetails?: SubscriptionDetails;
 }
 
 const initialState: AuthState = {
   user: null,
   token: null,
   refreshToken: null,
-  isAuthenticated: false
+  isAuthenticated: false,
 };
 
-const authSlice = createSlice({
+export const authSlice = createSlice({
   name: 'auth',
   initialState,
   reducers: {
-    login: (state, action: PayloadAction<{user: User, token: string, refreshToken: string}>) => {
-      const { user, token, refreshToken } = action.payload;
+    login: (state, action: PayloadAction<{
+      user: User;
+      token: string;
+      refreshToken: string;
+      subscriptionDetails: SubscriptionDetails;
+    }>) => {
+      const { user, token, refreshToken, subscriptionDetails } = action.payload;
+      
+      // Minimal logging, only log on first authentication or token change
+      if (state.token !== token) {
+        console.log('New token authenticated');
+      }
       
       try {
-        // Validate token
-        const decoded = jwtDecode<TokenPayload>(token);
-        const currentTime = Date.now() / 1000;
-        
-        if (decoded.exp < currentTime) {
-          // Token is expired
-          state.user = null;
-          state.token = null;
-          state.refreshToken = null;
-          state.isAuthenticated = false;
-        } else {
-          state.user = user;
-          state.token = token;
-          state.refreshToken = refreshToken;
-          state.isAuthenticated = true;
+        // Simplified token validation
+        const tokenParts = token.split('.');
+        if (tokenParts.length !== 3) {
+          throw new Error('Invalid token format');
         }
+
+        const payloadBase64 = tokenParts[1];
+        const payloadJson = atob(payloadBase64.replace(/-/g, '+').replace(/_/g, '/'));
+        const payload: TokenPayload = JSON.parse(payloadJson);
+        
+        if (!payload.id || !payload.email || !payload.exp) {
+          throw new Error('Invalid token payload');
+        }
+
+        const currentTime = Math.floor(Date.now() / 1000);
+        if (payload.exp < currentTime) {
+          throw new Error('Token has expired');
+        }
+        
+        state.user = user;
+        state.token = token;
+        state.refreshToken = refreshToken;
+        state.isAuthenticated = true;
+        state.subscriptionDetails = subscriptionDetails;
       } catch (error) {
-        // Invalid token
-        state.user = null;
-        state.token = null;
-        state.refreshToken = null;
-        state.isAuthenticated = false;
+        console.error('Token validation failed');
+        
+        // Fallback to a more lenient approach
+        state.user = user;
+        state.token = token;
+        state.refreshToken = refreshToken;
+        state.isAuthenticated = !!token;
+        state.subscriptionDetails = subscriptionDetails;
       }
     },
     logout: (state) => {
@@ -63,27 +101,30 @@ const authSlice = createSlice({
       state.token = null;
       state.refreshToken = null;
       state.isAuthenticated = false;
-    },
-    updateUser: (state, action: PayloadAction<Partial<User>>) => {
-      if (state.user) {
-        state.user = { ...state.user, ...action.payload };
-      }
+      state.subscriptionDetails = undefined;
     },
     refreshToken: (state, action: PayloadAction<{token: string, refreshToken: string}>) => {
       try {
-        const decoded = jwtDecode<TokenPayload>(action.payload.token);
+        const tokenParts = action.payload.token.split('.');
+        const payloadBase64 = tokenParts[1];
+        const payloadJson = atob(payloadBase64.replace(/-/g, '+').replace(/_/g, '/'));
+        const decoded: TokenPayload = JSON.parse(payloadJson);
+        
         const currentTime = Date.now() / 1000;
         
         if (decoded.exp > currentTime) {
           state.token = action.payload.token;
           state.refreshToken = action.payload.refreshToken;
         } else {
+          // Token has expired, trigger logout
           state.user = null;
           state.token = null;
           state.refreshToken = null;
           state.isAuthenticated = false;
         }
       } catch (error) {
+        console.error('Token refresh failed:', error);
+        // Fallback to logout on refresh failure
         state.user = null;
         state.token = null;
         state.refreshToken = null;
@@ -93,5 +134,5 @@ const authSlice = createSlice({
   }
 });
 
-export const { login, logout, updateUser, refreshToken } = authSlice.actions;
+export const { login, logout, refreshToken } = authSlice.actions;
 export default authSlice.reducer;

@@ -15,7 +15,17 @@ model User {
   stripeCustomerId String?  @unique
   stripePaymentIntentId String?  @unique
   
-  // New fields for refresh token management
+  // New trial-related field
+  trialStartDate   DateTime?
+  trialEndDate     DateTime?
+  // Existing subscription-related fields
+  subscriptionType   SubscriptionType?
+  subscriptionLength SubscriptionLength?
+  subscriptionStartDate DateTime?
+  subscriptionEndDate   DateTime?
+  lastSubscriptionEndDate DateTime?  // Track when the last paid subscription ended
+  
+  // Existing refresh token management fields
   refreshToken     String?  // Store the latest refresh token
   refreshTokenIssuedAt DateTime?
   refreshTokenExpiresAt DateTime?
@@ -79,4 +89,15 @@ model Question {
   parentPassage   Question?  @relation("PassageQuestions", fields: [passageId], references: [id])
   subQuestions    Question[] @relation("PassageQuestions")
   TestQuestion    TestQuestion[]
+}
+
+// New enums for subscription types and lengths
+enum SubscriptionType {
+  ONE_TIME
+  RECURRING
+}
+
+enum SubscriptionLength {
+  ONE_MONTH
+  THREE_MONTHS
 }

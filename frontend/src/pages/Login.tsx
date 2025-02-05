@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import { login } from '../redux/authSlice';
-import { authService } from '../services/api';
+import api from '../services/api';
 import { RootState } from '../redux/store';
 import { isTokenExpired } from '../services/api';
 
@@ -30,16 +30,30 @@ const Login: React.FC = () => {
     setError('');
 
     try {
-      const { token, user } = await authService.login(email, password);
+      const response = await api.post('/auth/login', { email, password });
+      const { 
+        accessToken, 
+        refreshToken, 
+        userId, 
+        isPaidMember, 
+        subscriptionDetails 
+      } = response.data;
       
       dispatch(login({
         user: {
-          id: user.id,
-          email: user.email,
-          isPaidMember: user.isPaidMember
+          id: userId,
+          email,
+          isPaidMember,
+          subscriptionType: subscriptionDetails?.subscriptionType || null
         },
-        token,
-        refreshToken: user.refreshToken
+        token: accessToken,
+        refreshToken,
+        subscriptionDetails: {
+          status: subscriptionDetails?.status || 'INACTIVE',
+          canExtend: subscriptionDetails?.canExtend || false,
+          canPurchase: subscriptionDetails?.canPurchase || true,
+          subscriptionEndDate: subscriptionDetails?.subscriptionEndDate
+        }
       }));
 
       navigate('/dashboard');
