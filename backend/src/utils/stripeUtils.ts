@@ -1,9 +1,11 @@
 import Stripe from 'stripe';
 import { PrismaClient, Prisma, User } from '@prisma/client';
 
-// Extend User type to include stripeCustomerId
-type UserWithStripeCustomerId = User & {
+// Extend User type to include additional properties
+interface UserWithStripeCustomerId extends Omit<User, 'stripeCustomerId'> {
   stripeCustomerId?: string | null;
+  subscriptionStartDate: Date | null;
+  subscriptionEndDate: Date | null;
 }
 
 // Extend the UserUpdateInput type to include stripeCustomerId
@@ -28,6 +30,17 @@ if (!process.env.STRIPE_THREE_MONTHS_PRICE_ID) {
   throw new Error('STRIPE_THREE_MONTHS_PRICE_ID is not defined');
 }
 
+// Determine return URL with fallback
+const getReturnUrl = () => {
+  const stripReturnUrl = process.env.STRIPE_RETURN_URL;
+  const frontendUrl = process.env.FRONTEND_URL;
+  
+  if (stripReturnUrl) return stripReturnUrl;
+  if (frontendUrl) return `${frontendUrl}/payment/return`;
+  
+  throw new Error('No return URL configured for Stripe payments');
+};
+
 const prisma = new PrismaClient();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2025-01-27.acacia'
@@ -45,26 +58,24 @@ export const createCheckoutSession = async (userId: string) => {
       where: { id: userId },
       select: { id: true, email: true, isPaidMember: true } 
     });
-    
+
     if (!user) {
       throw new Error('User not found');
     }
 
-    if (user.isPaidMember) {
-      throw new Error('User is already a paid member');
-    }
+    const stripeCustomerId = await findOrCreateStripeCustomer(userId);
 
     const session = await stripe.checkout.sessions.create({
-      payment_method_types: ['card'],
       mode: 'subscription',
+      customer: stripeCustomerId,
       line_items: [
         {
-          price: process.env.STRIPE_SUBSCRIPTION_PRICE_ID,
+          price: SUBSCRIPTION_PRICES.ONE_MONTH,
           quantity: 1,
         },
       ],
-      success_url: `${process.env.FRONTEND_URL}/dashboard?success=true`,
-      cancel_url: `${process.env.FRONTEND_URL}/subscribe`,
+      success_url: `${getReturnUrl()}?payment=success`,
+      cancel_url: `${getReturnUrl()}?payment=canceled`,
       client_reference_id: userId,
       customer_email: user.email || undefined,
       metadata: {
@@ -74,7 +85,7 @@ export const createCheckoutSession = async (userId: string) => {
 
     return session;
   } catch (error) {
-    console.error('Error creating checkout session:', error);
+    console.error('Checkout Session Creation Error:', error);
     throw error;
   }
 };
@@ -82,124 +93,395 @@ export const createCheckoutSession = async (userId: string) => {
 export const createOneTimePayment = async (
   userId: string, 
   paymentMethodId: string, 
-  subscriptionLength: 'ONE_MONTH' | 'THREE_MONTHS'
+  subscriptionLength: 'ONE_MONTH' | 'THREE_MONTHS',
+  isExistingPaidMember: boolean = false
 ) => {
   try {
-    console.log('One-time Payment Process Started', { 
-      userId, 
-      paymentMethodId, 
-      subscriptionLength,
-      paymentMethodPrefix: paymentMethodId.slice(0, 5) 
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new Error('User not found');
+    }
+
+    const stripeCustomerId = await findOrCreateStripeCustomer(userId);
+
+    // Create payment intent with explicit metadata
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: subscriptionLength === 'ONE_MONTH' ? 2000 : 5000, // $20 for one month, $50 for three months
+      currency: 'usd',
+      customer: stripeCustomerId,
+      payment_method: paymentMethodId,
+      
+      // Add return URL configuration
+      return_url: getReturnUrl(),
+      
+      // Configure automatic payment methods
+      automatic_payment_methods: {
+        enabled: true,
+        allow_redirects: 'never'  // Prevent redirect-based payment methods
+      },
+      
+      confirm: true,
+      metadata: {
+        userId: userId,
+        type: 'ONE_TIME', // Explicitly set subscription type
+        subscriptionLength: subscriptionLength, // Include subscription length
+        isExistingPaidMember: isExistingPaidMember.toString() // Convert to string for metadata
+      }
     });
 
-    // Validate Stripe price ID
-    const priceId = SUBSCRIPTION_PRICES[subscriptionLength];
-    if (!priceId || !priceId.startsWith('price_')) {
-      console.error('Invalid Stripe Price ID', { 
-        priceId, 
-        expectedPrefix: 'price_' 
-      });
-      throw new Error(`Invalid Stripe Price ID for ${subscriptionLength} subscription`);
-    }
+    // Optional: Update user with payment method and subscription details
+    if (paymentIntent.payment_method) {
+      const subscriptionStartDate = new Date();
+      const subscriptionEndDate = calculateSubscriptionEndDate(subscriptionLength);
 
-    // Retrieve payment method details for additional validation
-    const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
-    
-    // Validate customer
-    let customerId = await findOrCreateStripeCustomer(userId);
-
-    // Attach payment method to customer
-    await stripe.paymentMethods.attach(paymentMethodId, {
-      customer: customerId,
-    });
-
-    // Validate the price ID exists in Stripe
-    let priceDetails;
-    try {
-      priceDetails = await stripe.prices.retrieve(priceId);
-      console.log('Price ID validated', { 
-        priceId, 
-        productId: priceDetails.product, 
-        unitAmount: priceDetails.unit_amount 
-      });
-    } catch (priceError) {
-      console.error('Invalid Stripe Price ID', { priceId, error: priceError });
-      throw priceError;
-    }
-
-    // Create one-time payment intent
-    let paymentIntent;
-    try {
-      paymentIntent = await stripe.paymentIntents.create({
-        amount: priceDetails.unit_amount!, // Amount in cents
-        currency: priceDetails.currency || 'usd',
-        customer: customerId,
-        payment_method: paymentMethodId,
-        confirm: true,
-        payment_method_types: ['card']
-      });
-      console.log('Payment Intent created successfully', { 
-        paymentIntentId: paymentIntent.id, 
-        customerId, 
-        amount: paymentIntent.amount 
-      });
-    } catch (paymentError) {
-      console.error('Error creating Payment Intent', { 
-        customerId, 
-        priceId, 
-        error: paymentError 
-      });
-      throw paymentError;
-    }
-
-    // Calculate subscription end date
-    const subscriptionEndDate = calculateSubscriptionEndDate(subscriptionLength);
-
-    // Update user to paid member
-    try {
       await prisma.user.update({
         where: { id: userId },
         data: { 
+          // Explicitly set paid membership status
           isPaidMember: true,
-          stripePaymentIntentId: paymentIntent.id,
+          // Clear trial dates
+          trialStartDate: null,
+          trialEndDate: null,
+          // Set subscription dates
+          subscriptionStartDate,
+          subscriptionEndDate,
+          // Set subscription type
           subscriptionType: 'ONE_TIME',
-          subscriptionLength: subscriptionLength,
-          subscriptionStartDate: new Date(),
-          subscriptionEndDate: subscriptionEndDate
-        } as Prisma.UserUpdateInput
+          // Set subscription length
+          subscriptionLength: subscriptionLength as 'ONE_MONTH' | 'THREE_MONTHS',
+          // Update payment-related fields
+          stripePaymentIntentId: paymentIntent.id,
+          lastSubscriptionUpdateDate: new Date()
+        }
       });
-      console.log('User updated to paid member', { 
-        userId,
-        paymentIntentId: paymentIntent.id,
-        subscriptionEndDate 
+
+      console.log(`User ${userId} subscription updated directly`, {
+        subscriptionStartDate,
+        subscriptionEndDate,
+        subscriptionType: 'ONE_TIME'
       });
-    } catch (updateError) {
-      console.error('Error updating user to paid member', { 
-        userId,
-        paymentIntentId: paymentIntent.id, 
-        error: updateError 
-      });
-      throw updateError;
     }
 
-    return paymentIntent;
+    return {
+      paymentIntent,
+      subscriptionEndDate: calculateSubscriptionEndDate(subscriptionLength)
+    };
+
   } catch (error) {
-    console.error('Detailed One-time Payment Error:', error);
+    console.error('One-Time Payment Error:', error);
     throw error;
   }
 };
 
+export const renewSubscription = async (
+  userId: string, 
+  paymentMethodId: string,
+  subscriptionLength: 'ONE_MONTH' | 'THREE_MONTHS'
+) => {
+  try {
+    console.log('Renewing subscription:', { 
+      userId, 
+      paymentMethodId, 
+      subscriptionLength,
+      timestamp: new Date().toISOString()
+    });
+
+    // Validate input
+    if (!userId || !paymentMethodId || !subscriptionLength) {
+      throw new Error('Missing required parameters');
+    }
+
+    // Retrieve user with full subscription details
+    const user = await prisma.user.findUnique({ 
+      where: { id: userId },
+      select: { 
+        id: true, 
+        email: true, 
+        stripeCustomerId: true,
+        subscriptionEndDate: true,
+        subscriptionStartDate: true,  // Add this line
+        isPaidMember: true,
+        lastSubscriptionEndDate: true,
+        trialStartDate: true,
+        trialEndDate: true
+      } 
+    });
+
+    if (!user) {
+      console.error('User not found for subscription renewal:', userId);
+      throw new Error('User not found');
+    }
+
+    // Detailed logging of current user subscription state
+    console.log('Current User Subscription State:', {
+      isPaidMember: user.isPaidMember,
+      subscriptionEndDate: user.subscriptionEndDate,
+      lastSubscriptionEndDate: user.lastSubscriptionEndDate,
+      trialStartDate: user.trialStartDate,
+      trialEndDate: user.trialEndDate
+    });
+
+    // Determine the new subscription start and end dates
+    const currentDate = new Date();
+    const currentSubscriptionEndDate = user.subscriptionEndDate || currentDate;
+    
+    // Logging date calculations
+    console.log('Date Calculations:', {
+      currentDate,
+      currentSubscriptionEndDate,
+      isCurrentSubscriptionActive: currentSubscriptionEndDate > currentDate
+    });
+
+    // If current subscription is still active, extend from the current end date
+    // Otherwise, start a new subscription from today
+    const subscriptionStartDate = currentSubscriptionEndDate > currentDate 
+      ? currentSubscriptionEndDate 
+      : currentDate;
+    
+    const subscriptionEndDate = calculateSubscriptionEndDate(
+      subscriptionLength, 
+      subscriptionStartDate
+    );
+
+    // Logging new subscription dates
+    console.log('New Subscription Dates:', {
+      subscriptionStartDate,
+      subscriptionEndDate
+    });
+
+    // Ensure Stripe customer exists
+    const stripeCustomerId = user.stripeCustomerId || 
+      await findOrCreateStripeCustomer(userId);
+
+    // Calculate amount based on subscription length
+    const amount = subscriptionLength === 'ONE_MONTH' ? 2000 : 5000; // Amount in cents
+
+    // Create Payment Intent with explicit configuration
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: amount,
+      currency: 'usd',
+      customer: stripeCustomerId,
+      payment_method: paymentMethodId,
+      
+      // Explicitly handle return URL and payment method redirects
+      return_url: getReturnUrl(),
+      
+      // Configure automatic payment methods
+      automatic_payment_methods: {
+        enabled: true,
+        allow_redirects: 'never'  // Prevent redirect-based payment methods
+      },
+      
+      // Confirm the payment immediately
+      confirm: true,
+      
+      // Add metadata for tracking
+      metadata: {
+        userId,
+        subscriptionLength,
+        type: 'subscription_renewal',
+        previousSubscriptionEndDate: currentSubscriptionEndDate.toISOString()
+      }
+    });
+
+    // Update user's subscription details
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: { 
+        // Ensure paid membership status
+        isPaidMember: true,
+        
+        // Always use the existing start date, only update end date
+        subscriptionStartDate: {
+          set: user.subscriptionStartDate || subscriptionStartDate
+        },
+        subscriptionEndDate: {
+          set: subscriptionEndDate
+        },
+        
+        // Track last subscription details
+        lastSubscriptionEndDate: user.subscriptionEndDate,
+        lastRenewalDate: currentDate,
+        
+        // Update payment-related fields
+        stripePaymentIntentId: paymentIntent.id,
+        lastSubscriptionUpdateDate: currentDate,
+        
+        // Optional: Clear trial dates if still present
+        trialStartDate: null,
+        trialEndDate: null
+      },
+      select: {
+        id: true,
+        email: true,
+        subscriptionStartDate: true,
+        subscriptionEndDate: true,
+        lastSubscriptionEndDate: true
+      }
+    });
+
+    console.log('Subscription Renewal Result:', {
+      userId: updatedUser.id,
+      email: updatedUser.email,
+      subscriptionStartDate: updatedUser.subscriptionStartDate,
+      subscriptionEndDate: updatedUser.subscriptionEndDate,
+      lastSubscriptionEndDate: updatedUser.lastSubscriptionEndDate
+    });
+
+    return {
+      paymentIntent,
+      subscriptionStartDate,
+      subscriptionEndDate
+    };
+
+  } catch (error) {
+    console.error('Comprehensive Subscription Renewal Error:', {
+      userId,
+      subscriptionLength,
+      errorName: error instanceof Error ? error.name : 'Unknown Error',
+      errorMessage: error instanceof Error ? error.message : 'Unknown Error',
+      errorStack: error instanceof Error ? error.stack : 'No stack trace'
+    });
+    throw error;
+  }
+};
+
+export const handleStripeWebhook = async (event: Stripe.Event) => {
+  try {
+    switch (event.type) {
+      case 'checkout.session.completed':
+        const session = event.data.object as Stripe.Checkout.Session;
+        const userId = session.metadata?.userId as string;
+
+        if (userId) {
+          const subscriptionStartDate = new Date();
+          const subscriptionLength = session.metadata?.subscriptionLength || 'ONE_MONTH';
+          const subscriptionEndDate = calculateSubscriptionEndDate(subscriptionLength);
+
+          await prisma.user.update({
+            where: { id: userId },
+            data: { 
+              // Explicitly set paid membership status
+              isPaidMember: true,
+              // Clear trial dates
+              trialStartDate: null,
+              trialEndDate: null,
+              // Set subscription dates
+              subscriptionStartDate,
+              subscriptionEndDate,
+              // Set subscription type
+              subscriptionType: 'ONE_TIME',
+              // Remove any existing trial-related flags
+              subscriptionLength: subscriptionLength as 'ONE_MONTH' | 'THREE_MONTHS',
+              // Track last update
+              lastSubscriptionUpdateDate: new Date()
+            }
+          });
+
+          console.log(`User ${userId} became a paid member via checkout session`, {
+            subscriptionStartDate,
+            subscriptionEndDate,
+            subscriptionType: 'ONE_TIME'
+          });
+        }
+        break;
+
+      case 'payment_intent.succeeded':
+        const paymentIntent = event.data.object as Stripe.PaymentIntent;
+        const paymentUserId = paymentIntent.metadata?.userId;
+        const paymentSubscriptionLength = 
+          paymentIntent.metadata?.subscriptionLength === 'THREE_MONTHS' 
+            ? 'THREE_MONTHS' 
+            : 'ONE_MONTH';
+
+        if (paymentUserId) {
+          const subscriptionStartDate = new Date();
+          const subscriptionEndDate = calculateSubscriptionEndDate(paymentSubscriptionLength);
+
+          await prisma.user.update({
+            where: { id: paymentUserId },
+            data: { 
+              // Explicitly set paid membership status
+              isPaidMember: true,
+              // Clear trial dates
+              trialStartDate: null,
+              trialEndDate: null,
+              // Set subscription dates
+              subscriptionStartDate,
+              subscriptionEndDate,
+              // Set subscription type with string value
+              subscriptionType: 'ONE_TIME',
+              // Set subscription length
+              subscriptionLength: paymentSubscriptionLength,
+              // Track last update
+              lastSubscriptionUpdateDate: new Date()
+            }
+          });
+
+          console.log(`User ${paymentUserId} subscription updated via payment intent`, {
+            subscriptionStartDate,
+            subscriptionEndDate,
+            subscriptionType: 'ONE_TIME',
+            subscriptionLength: paymentSubscriptionLength
+          });
+        }
+        break;
+    
+      case 'customer.subscription.deleted':
+        const subscription = event.data.object as Stripe.Subscription;
+        const deletedUserId = subscription.metadata.userId;
+
+        if (deletedUserId) {
+          await prisma.user.update({
+            where: { id: deletedUserId },
+            data: { 
+              // Reset membership status
+              isPaidMember: false,
+              stripeCustomerId: null,
+              // Clear subscription dates
+              subscriptionStartDate: null,
+              subscriptionEndDate: null,
+              subscriptionType: null,
+              subscriptionLength: null,
+              // Optionally reset to trial if desired
+              trialStartDate: new Date(),
+              trialEndDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days trial
+              // Track last update
+              lastSubscriptionUpdateDate: new Date()
+            }
+          });
+          console.log(`User ${deletedUserId} subscription cancelled`);
+        }
+        break;
+
+      default:
+        console.log(`Unhandled event type ${event.type}`);
+    }
+  } catch (error) {
+    console.error('Stripe Webhook Error:', error);
+    // Ensure error is logged but doesn't break webhook processing
+  }
+};
+
 // Helper function to calculate subscription end date
-const calculateSubscriptionEndDate = (subscriptionLength: string): Date => {
-  const now = new Date();
+export const calculateSubscriptionEndDate = (
+  subscriptionLength: string, 
+  existingEndDate: Date = new Date()
+): Date => {
+  const endDate = new Date(existingEndDate);
+  
   switch (subscriptionLength) {
     case 'ONE_MONTH':
-      return new Date(now.setMonth(now.getMonth() + 1));
+      endDate.setMonth(endDate.getMonth() + 1);
+      break;
     case 'THREE_MONTHS':
-      return new Date(now.setMonth(now.getMonth() + 3));
+      endDate.setMonth(endDate.getMonth() + 3);
+      break;
     default:
-      throw new Error('Invalid subscription length');
+      throw new Error(`Invalid subscription length: ${subscriptionLength}`);
   }
+  
+  return endDate;
 };
 
 // Helper function to find or create Stripe customer
@@ -247,83 +529,5 @@ const findOrCreateStripeCustomer = async (userId: string): Promise<string> => {
       error: customerError 
     });
     throw customerError;
-  }
-};
-
-export const renewSubscription = async (
-  userId: string, 
-  paymentMethodId: string,
-  subscriptionLength: 'ONE_MONTH' | 'THREE_MONTHS'
-) => {
-  try {
-    // Find user's current subscription details
-    const user = await prisma.user.findUnique({ 
-      where: { id: userId } 
-    });
-
-    if (!user) {
-      throw new Error('User not found');
-    }
-
-    // Check if user can renew
-    if (!user.subscriptionEndDate || user.subscriptionEndDate < new Date()) {
-      // Subscription has expired or is about to expire
-      const paymentIntent = await createOneTimePayment(
-        userId, 
-        paymentMethodId, 
-        subscriptionLength
-      );
-
-      return paymentIntent;
-    } else {
-      throw new Error('Subscription is still active');
-    }
-  } catch (error) {
-    console.error('Subscription Renewal Error:', error);
-    throw error;
-  }
-};
-
-export const handleStripeWebhook = async (event: Stripe.Event) => {
-  try {
-    switch (event.type) {
-      case 'checkout.session.completed':
-        const session = event.data.object as Stripe.Checkout.Session;
-        const userId = session.client_reference_id;
-
-        if (userId) {
-          await prisma.user.update({
-            where: { id: userId },
-            data: { 
-              isPaidMember: true,
-              stripeCustomerId: session.customer as string
-            } as UserUpdateInputWithStripeCustomerId
-          });
-          console.log(`User ${userId} became a paid member`);
-        }
-        break;
-    
-      case 'customer.subscription.deleted':
-        const subscription = event.data.object as Stripe.Subscription;
-        const deletedUserId = subscription.metadata.userId;
-
-        if (deletedUserId) {
-          await prisma.user.update({
-            where: { id: deletedUserId },
-            data: { 
-              isPaidMember: false,
-              stripeCustomerId: null 
-            } as UserUpdateInputWithStripeCustomerId
-          });
-          console.log(`User ${deletedUserId} subscription cancelled`);
-        }
-        break;
-
-      default:
-        console.log(`Unhandled event type ${event.type}`);
-    }
-  } catch (error) {
-    console.error('Error handling Stripe webhook:', error);
-    throw error;
   }
 };

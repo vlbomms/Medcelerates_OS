@@ -59,7 +59,8 @@ const createSubscriptionHandler: AsyncRequestHandler = async (
   try {
     const { 
       paymentMethodId, 
-      subscriptionLength 
+      subscriptionLength,
+      isExistingPaidMember = false // Default to false if not provided
     } = req.body;
     const userId = req.user?.id;
 
@@ -84,12 +85,25 @@ const createSubscriptionHandler: AsyncRequestHandler = async (
     const paymentIntent = await createOneTimePayment(
       userId, 
       paymentMethodId, 
-      subscriptionLength as 'ONE_MONTH' | 'THREE_MONTHS'
+      subscriptionLength as 'ONE_MONTH' | 'THREE_MONTHS',
+      isExistingPaidMember
     );
     res.json(paymentIntent);
   } catch (error) {
     console.error('Subscription Creation Error:', error);
-    next(error);
+    
+    // Log more detailed error information
+    if (error instanceof Error) {
+      console.error('Error Name:', error.name);
+      console.error('Error Message:', error.message);
+      console.error('Error Stack:', error.stack);
+    }
+    
+    // Send a more informative error response
+    res.status(500).json({ 
+      error: 'Failed to create subscription', 
+      details: error instanceof Error ? error.message : 'Unknown error occurred' 
+    });
   }
 };
 
@@ -123,12 +137,13 @@ const renewSubscriptionHandler: AsyncRequestHandler = async (
       return;
     }
 
-    const renewalPaymentIntent = await renewSubscription(
+    const renewalResult = await renewSubscription(
       userId, 
-      paymentMethodId,
+      paymentMethodId, 
       subscriptionLength as 'ONE_MONTH' | 'THREE_MONTHS'
     );
-    res.json(renewalPaymentIntent);
+
+    res.json(renewalResult);
   } catch (error) {
     console.error('Subscription Renewal Error:', error);
     next(error);
@@ -202,10 +217,43 @@ const getSubscriptionStatusHandler: AsyncRequestHandler = async (
   }
 };
 
+// Stripe Payment Return Handler
+router.get('/payment/return', authenticateToken, async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { payment_intent, payment_intent_client_secret, redirect_status } = req.query;
+
+    // Type guard to ensure req.user exists
+    if (!req.user) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    const paymentIntent = await stripe.paymentIntents.retrieve(payment_intent as string);
+
+    // Handle different payment statuses
+    switch (paymentIntent.status) {
+      case 'succeeded':
+        res.status(200).json({ status: 'success', message: 'Payment successful' });
+        break;
+      case 'requires_payment_method':
+        res.status(400).json({ status: 'failed', message: 'Payment method required' });
+        break;
+      case 'canceled':
+        res.status(400).json({ status: 'canceled', message: 'Payment was canceled' });
+        break;
+      default:
+        res.status(400).json({ status: 'unknown', message: 'Unknown payment status' });
+    }
+  } catch (error) {
+    console.error('Payment Return Error:', error);
+    next(error);
+  }
+});
+
 router.post('/create-checkout-session', authenticateToken, createCheckoutSessionHandler);
 router.post('/create-subscription', authenticateToken, createSubscriptionHandler);
 router.post('/renew-subscription', authenticateToken, renewSubscriptionHandler);
 router.post('/webhook', express.raw({type: 'application/json'}), stripeWebhookHandler);
-router.get('/subscription-status', authenticateToken, getSubscriptionStatusHandler);
+router.get('/subscription', authenticateToken, getSubscriptionStatusHandler);
 
 export default router;

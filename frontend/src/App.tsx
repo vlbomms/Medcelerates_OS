@@ -5,9 +5,11 @@ import { PersistGate } from 'redux-persist/integration/react';
 import { store, persistor } from './redux/store';
 import ProtectedRoute from './components/ProtectedRoute';
 import Dashboard from './pages/Dashboard';
+import Profile from './pages/Profile';
 import Subscribe from './pages/Subscribe';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import PaymentReturn from './pages/PaymentReturn';
 
 const App: React.FC = () => {
   return (
@@ -18,11 +20,20 @@ const App: React.FC = () => {
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
             <Route path="/subscribe" element={<Subscribe />} />
+            <Route path="/payment/return" element={<PaymentReturn />} />
             <Route 
               path="/dashboard" 
               element={
                 <ProtectedRoute>
                   <Dashboard />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/profile" 
+              element={
+                <ProtectedRoute>
+                  <Profile />
                 </ProtectedRoute>
               } 
             />

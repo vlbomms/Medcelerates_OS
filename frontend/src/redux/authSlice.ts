@@ -26,6 +26,7 @@ interface SubscriptionDetails {
   trialEndDate?: string;
   trialStartDate?: string;
   subscriptionType?: string | null;
+  subscriptionStartDate?: string | null;
 }
 
 interface AuthState {
@@ -103,6 +104,15 @@ export const authSlice = createSlice({
       state.isAuthenticated = false;
       state.subscriptionDetails = undefined;
     },
+    updateUserSubscription: (state, action: PayloadAction<{
+      isPaidMember: boolean;
+      subscriptionDetails?: SubscriptionDetails;
+    }>) => {
+      if (state.user) {
+        state.user.isPaidMember = action.payload.isPaidMember;
+      }
+      state.subscriptionDetails = action.payload.subscriptionDetails;
+    },
     refreshToken: (state, action: PayloadAction<{token: string, refreshToken: string}>) => {
       try {
         const tokenParts = action.payload.token.split('.');
@@ -134,5 +144,11 @@ export const authSlice = createSlice({
   }
 });
 
-export const { login, logout, refreshToken } = authSlice.actions;
+export const { 
+  login, 
+  logout, 
+  refreshToken,
+  updateUserSubscription 
+} = authSlice.actions;
+
 export default authSlice.reducer;
