@@ -89,6 +89,10 @@ router.post('/logout', authenticateToken, logoutHandler);
 router.post('/manage-subscription', authenticateToken, manageSubscriptionHandler);
 router.get('/membership-status', authenticateToken, subscriptionStatusHandler);
 
+// Add new routes to match frontend API calls
+router.get('/subscription-status', authenticateToken, subscriptionStatusHandler);
+router.get('/get-subscription-status', authenticateToken, subscriptionStatusHandler);
+
 // New routes for subscription management
 router.post('/check-expired-subscriptions', authenticateToken, async (req, res, next) => {
   try {

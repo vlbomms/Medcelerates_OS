@@ -1,22 +1,41 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { 
   HomeIcon, 
   PlusCircleIcon, 
   DocumentTextIcon, 
   CreditCardIcon, 
-  ArrowRightStartOnRectangleIcon 
+  ArrowRightStartOnRectangleIcon,
+  UserCircleIcon 
 } from '@heroicons/react/24/outline';
 
 const Sidebar: React.FC = () => {
+  const location = useLocation();
+
   return (
     <aside className="w-64 bg-gray-800 text-white p-4">
       <nav>
         <ul className="space-y-2">
           <li>
-            <Link to="/" className="flex items-center space-x-2 hover:bg-gray-700 p-2 rounded">
+            <Link 
+              to="/dashboard" 
+              className={`flex items-center space-x-2 hover:bg-gray-700 p-2 rounded ${
+                location.pathname === '/dashboard' ? 'bg-gray-700' : ''
+              }`}
+            >
               <HomeIcon className="h-6 w-6" />
               <span>Dashboard</span>
+            </Link>
+          </li>
+          <li>
+            <Link 
+              to="/profile" 
+              className={`flex items-center space-x-2 hover:bg-gray-700 p-2 rounded ${
+                location.pathname === '/profile' ? 'bg-gray-700' : ''
+              }`}
+            >
+              <UserCircleIcon className="h-6 w-6" />
+              <span>Profile</span>
             </Link>
           </li>
           <li>
@@ -37,12 +56,7 @@ const Sidebar: React.FC = () => {
               <span>Subscribe</span>
             </Link>
           </li>
-          <li>
-            <button className="w-full flex items-center space-x-2 hover:bg-gray-700 p-2 rounded">
-              <ArrowRightStartOnRectangleIcon className="h-6 w-6" />
-              <span>Logout</span>
-            </button>
-          </li>
+          {/* Removed logout button */}
         </ul>
       </nav>
     </aside>

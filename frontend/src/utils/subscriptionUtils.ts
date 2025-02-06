@@ -167,7 +167,7 @@ export const formatSubscriptionStatus = (
       });
       
       const result = remainingDays !== null && remainingDays > 0 
-        ? `Free Trial (${remainingDays} days remaining)` 
+        ? 'Free Trial'
         : 'Trial Expired';
 
       console.log('Final Result:', result);
