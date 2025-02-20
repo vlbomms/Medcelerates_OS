@@ -37,16 +37,25 @@ model User {
   tests            Test[]
 }
 
+// In /Users/vikasbommineni/test-prep-platform/backend/prisma/schema.prisma
 model Test {
-  id            String        @id @default(uuid())
-  testId        String        // e.g., a short unique code for display
-  userId        String
-  user          User          @relation(fields: [userId], references: [id])
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  status        TestStatus    @default(IN_PROGRESS)
-  testQuestions TestQuestion[]
-  timeLeftSeconds Int?
+  id               String         @id @default(uuid())
+  testId           String         @unique @default(cuid())
+  userId           String
+  user             User           @relation(fields: [userId], references: [id])
+  status           TestStatus     @default(IN_PROGRESS)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  completedAt      DateTime?
+  
+  // Add these fields
+  totalTestDuration Int           @default(3600)  // Default 1 hour in seconds
+  startTime         DateTime?     // When the test was first started
+  pausedTime        DateTime?     // When the test was paused
+  remainingSeconds  Int?          // Remaining time when paused or continuing
+  score            Float?         // Optional score field
+  
+  testQuestions    TestQuestion[]
 }
 
 enum TestStatus {
@@ -71,6 +80,8 @@ model Question {
   unit              String?
   isPassage         Boolean  // true if this is a passage
   passageId         String?  // references a passage if this is a sub-question
+  passage           Question?  @relation("PassageToQuestions", fields: [passageId], references: [id])
+  subQuestions      Question[] @relation("PassageToQuestions")
 
   // If isPassage = true, store the passage text here
   passageHtml       String?
@@ -86,10 +97,7 @@ model Question {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  // Passage relationship
-  parentPassage   Question?  @relation("PassageQuestions", fields: [passageId], references: [id])
-  subQuestions    Question[] @relation("PassageQuestions")
-  TestQuestion    TestQuestion[]
+  testQuestions   TestQuestion[]
 }
 
 // New enums for subscription types and lengths

@@ -1,6 +1,5 @@
-import express, { Request, Response, NextFunction, RequestHandler } from 'express';
-import { ParamsDictionary } from 'express-serve-static-core';
-import { ParsedQs } from 'qs';
+// In /Users/vikasbommineni/test-prep-platform/backend/src/routes/authRoutes.ts
+import express, { Request, Response, NextFunction } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { 
   register, 
@@ -13,101 +12,94 @@ import {
   extendSubscription
 } from '../controllers/authController';
 import { authenticateToken } from '../middleware/authMiddleware';
+import asyncHandler from '../middleware/asyncHandler';
 
 const prisma = new PrismaClient();
 
 const router = express.Router();
 
-// Explicitly type the handlers as RequestHandler
-const registerHandler: RequestHandler = async (req, res, next) => {
-  try {
-    await register(req, res);
-  } catch (error) {
-    next(error);
-  }
+// Modify the type to make next non-optional
+type AsyncRouteHandler = (
+  req: Request, 
+  res: Response, 
+  next: NextFunction
+) => Promise<void>;
+
+// Wrap controllers to ensure consistent error handling and type safety
+const wrapHandler = (handler: AsyncRouteHandler) => 
+  asyncHandler(async (req: Request, res: Response, next: NextFunction) => {
+    await handler(req, res, next);
+  });
+
+// Handlers with explicit typing
+const registerHandler: AsyncRouteHandler = async (req, res, next) => {
+  await register(req, res);
+  next();
 };
 
-const loginHandler: RequestHandler = async (req, res, next) => {
-  try {
-    await login(req, res);
-  } catch (error) {
-    next(error);
-  }
+const loginHandler: AsyncRouteHandler = async (req, res, next) => {
+  await login(req, res);
+  next();
 };
 
-const refreshTokenHandler: RequestHandler = async (req, res, next) => {
-  try {
-    await refreshAccessToken(req, res);
-  } catch (error) {
-    next(error);
-  }
+const refreshTokenHandler: AsyncRouteHandler = async (req, res, next) => {
+  await refreshAccessToken(req, res);
+  next();
 };
 
-const getMembershipStatusHandler: RequestHandler<ParamsDictionary, any, any, ParsedQs, Record<string, any>> = 
-  async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-  try {
-    const userId = req.user?.id;
-    if (!userId) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-    const subscriptionStatus = await getUserSubscriptionStatus(userId);
-    res.json(subscriptionStatus);
-  } catch (error) {
-    next(error);
+const getMembershipStatusHandler = asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
   }
+  const subscriptionStatus = await getUserSubscriptionStatus(userId);
+  res.json(subscriptionStatus);
+});
+
+const manageSubscriptionHandler: AsyncRouteHandler = async (req, res, next) => {
+  await manageSubscription(req, res);
+  next();
 };
 
-const manageSubscriptionHandler: RequestHandler = async (req, res, next) => {
-  try {
-    await manageSubscription(req, res);
-  } catch (error) {
-    next(error);
+const subscriptionStatusHandler = asyncHandler(async (req, res) => {
+  const userId = req.user?.id;
+  if (!userId) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
   }
-};
 
-const subscriptionStatusHandler: RequestHandler = async (req, res, next) => {
-  try {
-    const userId = req.user?.id;
-    if (!userId) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
+  const subscriptionStatus = await getUserSubscriptionStatus(userId);
+  res.json(subscriptionStatus);
+});
 
-    const subscriptionStatus = await getUserSubscriptionStatus(userId);
-    res.json(subscriptionStatus);
-  } catch (error) {
-    next(error);
-  }
+// Modify the logout handler to match the new signature
+const wrappedLogoutHandler: AsyncRouteHandler = async (req, res, next) => {
+  await logoutHandler(req, res);
+  next();
 };
 
 // Routes
-router.post('/register', registerHandler);
-router.post('/login', loginHandler);
-router.post('/refresh-token', refreshTokenHandler);
-router.post('/logout', authenticateToken, logoutHandler);
-router.post('/manage-subscription', authenticateToken, manageSubscriptionHandler);
-router.get('/membership-status', authenticateToken, subscriptionStatusHandler);
+router.post('/register', wrapHandler(registerHandler));
+router.post('/login', wrapHandler(loginHandler));
+router.post('/refresh-token', wrapHandler(refreshTokenHandler));
+router.post('/logout', authenticateToken, wrapHandler(wrappedLogoutHandler));
+router.post('/manage-subscription', authenticateToken, wrapHandler(manageSubscriptionHandler));
+router.get('/membership-status', authenticateToken, getMembershipStatusHandler);
 
 // Add new routes to match frontend API calls
 router.get('/subscription-status', authenticateToken, subscriptionStatusHandler);
 router.get('/get-subscription-status', authenticateToken, subscriptionStatusHandler);
 
 // New routes for subscription management
-router.post('/check-expired-subscriptions', authenticateToken, async (req, res, next) => {
-  try {
-    await checkAndUpdateExpiredSubscriptions(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
+router.post('/check-expired-subscriptions', authenticateToken, wrapHandler(async (req, res, next) => {
+  await checkAndUpdateExpiredSubscriptions(req, res);
+  next();
+}));
 
-router.post('/extend-subscription', authenticateToken, async (req, res, next) => {
-  try {
-    await extendSubscription(req, res);
-  } catch (error) {
-    next(error);
-  }
-});
+router.post('/extend-subscription', authenticateToken, wrapHandler(async (req, res, next) => {
+  await extendSubscription(req, res);
+  next();
+}));
 
 export default router;

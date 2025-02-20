@@ -4,6 +4,9 @@ import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
 import authRoutes from './routes/authRoutes';
 import stripeRoutes from './routes/stripeRoutes';
+import questionRoutes from './routes/questionRoutes';
+import testRoutes from './routes/testRoutes';
+import errorHandler from './middleware/errorHandler';
 
 // Load environment variables
 dotenv.config();
@@ -13,7 +16,7 @@ const PORT = process.env.PORT || 8000;
 
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:5173'], // Add frontend URLs
+  origin: ['http://localhost:3000', 'http://localhost:5173'], 
   credentials: true
 }));
 app.use(bodyParser.json());
@@ -23,6 +26,8 @@ app.use(express.urlencoded({ extended: true }));
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/stripe', stripeRoutes);
+app.use('/api', questionRoutes);
+app.use('/api/tests', testRoutes); 
 
 // Basic health check route
 app.get('/api/health', (req, res) => {
