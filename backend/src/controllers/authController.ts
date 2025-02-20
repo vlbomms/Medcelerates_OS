@@ -670,7 +670,7 @@ export const extendSubscription = async (req: Request, res: Response): Promise<R
   }
 };
 
-export const logoutHandler = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+export const logoutHandler = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = req.user?.id;
     

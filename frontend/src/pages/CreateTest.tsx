@@ -1,62 +1,81 @@
-import React, { useState } from 'react';
+import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
+import styled from 'styled-components';
+import { RootState } from '../redux/store';
+
+import CreateTestForm from '../components/CreateTestForm';
+import Sidebar from '../components/Sidebar';
+import ProtectedRoute from '../components/ProtectedRoute';
+
+const PageLayout = styled.div`
+  display: flex;
+  height: 100vh;
+`;
+
+const SidebarWrapper = styled.div`
+  width: 256px;
+  background-color: #1f2937;
+`;
+
+const MainContent = styled.div`
+  flex-grow: 1;
+  background-color: #f4f6f9;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 40px;
+  overflow-y: auto;
+`;
+
+const ContentContainer = styled.div`
+  width: 100%;
+  max-width: 800px;
+  background-color: white;
+  border-radius: 12px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  padding: 40px;
+`;
+
+const PageTitle = styled.h1`
+  color: #1f2937;
+  margin-bottom: 30px;
+  font-size: 24px;
+  font-weight: 600;
+  text-align: center;
+`;
 
 const CreateTest: React.FC = () => {
-  const [testName, setTestName] = useState('');
-  const [questions, setQuestions] = useState<string[]>([]);
   const navigate = useNavigate();
+  const user = useSelector((state: RootState) => state.auth.user);
+  const token = useSelector((state: RootState) => state.auth.token);
 
-  const handleAddQuestion = () => {
-    setQuestions([...questions, '']);
-  };
+  useEffect(() => {
+    // Redirect to login if not authenticated
+    if (!user || !token) {
+      navigate('/login');
+    }
+  }, [user, token, navigate]);
 
-  const handleQuestionChange = (index: number, value: string) => {
-    const newQuestions = [...questions];
-    newQuestions[index] = value;
-    setQuestions(newQuestions);
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    // TODO: Implement test creation logic
-    console.log('Test created', { testName, questions });
-    navigate('/dashboard');
+  const handleTestCreated = (testId: string) => {
+    // Navigate to the new test interface
+    navigate(`/test/${testId}/interface`);
   };
 
   return (
-    <div className="create-test-container">
-      <h2>Create New Test</h2>
-      <form onSubmit={handleSubmit}>
-        <div>
-          <label htmlFor="testName">Test Name</label>
-          <input
-            type="text"
-            id="testName"
-            value={testName}
-            onChange={(e) => setTestName(e.target.value)}
-            required
-          />
-        </div>
-        <div>
-          <h3>Questions</h3>
-          {questions.map((question, index) => (
-            <div key={index}>
-              <label htmlFor={`question-${index}`}>Question {index + 1}</label>
-              <textarea
-                id={`question-${index}`}
-                value={question}
-                onChange={(e) => handleQuestionChange(index, e.target.value)}
-                required
-              />
-            </div>
-          ))}
-          <button type="button" onClick={handleAddQuestion}>
-            Add Question
-          </button>
-        </div>
-        <button type="submit">Create Test</button>
-      </form>
-    </div>
+    <ProtectedRoute>
+      <PageLayout>
+        <SidebarWrapper>
+          <Sidebar />
+        </SidebarWrapper>
+        <MainContent>
+          <ContentContainer>
+            <PageTitle>Create a New Test</PageTitle>
+            <CreateTestForm onTestCreated={handleTestCreated} />
+          </ContentContainer>
+        </MainContent>
+      </PageLayout>
+    </ProtectedRoute>
   );
 };
 
