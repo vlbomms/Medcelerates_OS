@@ -5,6 +5,22 @@ import { useNavigate } from 'react-router-dom';
 import styled from 'styled-components';
 import { RootState } from '../redux/store';
 import { SubjectCount } from '../types/questionTypes';
+import { 
+  Dialog, 
+  DialogTitle, 
+  DialogContent, 
+  DialogContentText, 
+  DialogActions, 
+  Button 
+} from '@mui/material';
+
+// Define the error interface to match backend
+interface InsufficientQuestionsError {
+  name: string;
+  message: string;
+  availableQuestions: number;
+  passageGroups: any[];
+}
 
 // Styled Components
 const FormContainer = styled.div`
@@ -109,6 +125,14 @@ interface CreateTestFormProps {
   onTestCreated?: (testId: string) => void;
 }
 
+const formatDisplayText = (text: string | null | undefined): string => {
+  // If text is null or undefined, return a default value
+  if (!text) return 'Unknown';
+  
+  // Otherwise, replace underscores with spaces
+  return text.replace(/_/g, ' ');
+};
+
 const CreateTestForm: React.FC<CreateTestFormProps> = ({ onTestCreated }) => {
   const token = useSelector((state: RootState) => state.auth.token);
   const navigate = useNavigate();
@@ -134,7 +158,7 @@ const CreateTestForm: React.FC<CreateTestFormProps> = ({ onTestCreated }) => {
             'Authorization': `Bearer ${token}`,
             'Accept': 'application/json'
           },
-          timeout: 5000
+          timeout: 10000
         });
 
         // Validate and clean the response data
@@ -163,9 +187,18 @@ const CreateTestForm: React.FC<CreateTestFormProps> = ({ onTestCreated }) => {
   }, [token]);
 
   // Calculate total questions for a subject
-  const getSubjectTotalQuestions = (subjectName: string) => {
+  const getSubjectTotalQuestions = (subjectName: string | null | undefined): number => {
+    // If subjectName is null or undefined, return 0
+    if (!subjectName) return 0;
+  
+    // Find the subject, ensuring type safety
     const subject = subjects.find(s => s.subject === subjectName);
-    return subject ? subject.totalQuestionCount : 0;
+  
+    // If no subject found, return 0
+    if (!subject) return 0;
+  
+    // Calculate total question count for the subject
+    return subject.units.reduce((total, unit) => total + (unit.questionCount || 0), 0);
   };
 
   // Calculate total questions for a unit
@@ -193,11 +226,19 @@ const CreateTestForm: React.FC<CreateTestFormProps> = ({ onTestCreated }) => {
       );
     } else {
       // Select subject and all its units
-      setSelectedSubjects(prev => [...prev, subjectName]);
-      const subjectUnits = subject.units.map(u => u.name);
-      setSelectedUnits(prev => [
-        ...new Set([...prev, ...subjectUnits])
-      ]);
+      setSelectedSubjects(prev => {
+        // Ensure no duplicates and no null values
+        return Array.from(new Set([...prev, subjectName]));
+      });
+
+      const subjectUnits = subject.units
+        .map(u => u.name)
+        .filter((unit): unit is string => unit != null); // Type guard to ensure string
+
+      setSelectedUnits(prev => {
+        // Combine previous units with new units, removing duplicates
+        return Array.from(new Set([...prev, ...subjectUnits]));
+      });
     }
   };
 
@@ -286,6 +327,87 @@ const CreateTestForm: React.FC<CreateTestFormProps> = ({ onTestCreated }) => {
     }
   };
 
+  const [insufficientQuestionsDialog, setInsufficientQuestionsDialog] = useState<{
+    open: boolean;
+    availableQuestions?: number;
+    passageGroups?: any[];
+  }>({
+    open: false
+  });
+
+  const createTest = async () => {
+    try {
+      // Reset any previous error states
+      setError(null);
+      setInsufficientQuestionsDialog({ open: false });
+
+      // Prepare test creation parameters
+      const testParams = {
+        subjects: selectedSubjects,
+        units: selectedUnits,
+        numQuestions: questionCount
+      };
+
+      // Create test API call
+      const response = await axios.post('/api/tests', testParams, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      // Handle successful test creation
+      if (response.data.id) {
+        // Navigate to test or perform other actions
+        navigate(`/test/${response.data.id}`);
+      }
+    } catch (error) {
+      // Check if it's an insufficient questions error
+      if (axios.isAxiosError(error) && error.response?.data.name === 'InsufficientQuestionsError') {
+        const insufficientError = error.response.data as InsufficientQuestionsError;
+        
+        // Open dialog to confirm reduced test
+        setInsufficientQuestionsDialog({
+          open: true,
+          availableQuestions: insufficientError.availableQuestions,
+          passageGroups: insufficientError.passageGroups
+        });
+      } else {
+        // Handle other errors
+        setError('An unexpected error occurred');
+      }
+    }
+  };
+
+  const handleConfirmReducedTest = async () => {
+    try {
+      // Create test with available questions
+      const testParams = {
+        subjects: selectedSubjects,
+        units: selectedUnits,
+        numQuestions: insufficientQuestionsDialog.availableQuestions
+      };
+
+      const response = await axios.post('/api/tests', testParams, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      // Navigate to test or perform other actions
+      navigate(`/test/${response.data.id}`);
+
+      // Close the dialog
+      setInsufficientQuestionsDialog({ open: false });
+    } catch (error) {
+      // Handle any additional errors
+      setError('Failed to create test');
+    }
+  };
+
+  const handleCloseInsufficientQuestionsDialog = () => {
+    setInsufficientQuestionsDialog({ open: false });
+  };
+
   if (isLoading) {
     return <div>Loading subjects...</div>;
   }
@@ -359,6 +481,38 @@ const CreateTestForm: React.FC<CreateTestFormProps> = ({ onTestCreated }) => {
       </CreateButton>
 
       {error && <div style={{ color: 'red', marginTop: '16px' }}>{error}</div>}
+
+      <Dialog
+        open={insufficientQuestionsDialog.open}
+        onClose={handleCloseInsufficientQuestionsDialog}
+      >
+        <DialogTitle>Insufficient Questions</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            We could only find {insufficientQuestionsDialog.availableQuestions} 
+            {' '}questions that match your current selection. 
+            Would you like to create a test with this number of questions?
+          </DialogContentText>
+          <DialogContentText>
+            Note: This may affect the test's comprehensiveness.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button 
+            onClick={handleCloseInsufficientQuestionsDialog} 
+            color="primary"
+          >
+            Cancel
+          </Button>
+          <Button 
+            onClick={handleConfirmReducedTest} 
+            color="primary" 
+            autoFocus
+          >
+            Create Test
+          </Button>
+        </DialogActions>
+      </Dialog>
     </FormContainer>
   );
 };

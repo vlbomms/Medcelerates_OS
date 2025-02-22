@@ -1,4 +1,4 @@
-import { PrismaClient, TestStatus } from '@prisma/client';
+import { PrismaClient, TestStatus, Question } from '@prisma/client';
 import { v4 as uuidv4 } from 'uuid';
 
 const prisma = new PrismaClient();
@@ -10,7 +10,19 @@ interface CreateTestOptions {
   numQuestions?: number;
 }
 
-// In /Users/vikasbommineni/test-prep-platform/backend/src/services/testService.ts
+// Custom error class to provide more context
+class InsufficientQuestionsError extends Error {
+  availableQuestions: number;
+  passageGroups: any[];
+
+  constructor(message: string, availableQuestions: number, passageGroups: any[]) {
+    super(message);
+    this.name = 'InsufficientQuestionsError';
+    this.availableQuestions = availableQuestions;
+    this.passageGroups = passageGroups;
+  }
+}
+
 export async function createTest({
   userId, 
   subjectFilters = [], 
@@ -18,9 +30,7 @@ export async function createTest({
   numQuestions = 10
 }: CreateTestOptions) {
   // Construct dynamic filter based on provided subject and unit filters
-  const whereCondition: any = {
-    isPassage: false,
-  };
+  const whereCondition: any = {};
 
   if (subjectFilters.length > 0) {
     whereCondition.subject = { in: subjectFilters };
@@ -30,20 +40,119 @@ export async function createTest({
     whereCondition.unit = { in: unitFilters };
   }
 
-  // Fetch available questions matching the filters
-  const availableQuestions = await prisma.question.findMany({
-    where: whereCondition,
+  // Fetch passage-based questions
+  const passageQuestions = await prisma.question.findMany({
+    where: {
+      ...whereCondition,
+      isPassage: false, // Questions associated with passages
+      passageId: { not: null } // Ensure the question is part of a passage
+    },
+    include: {
+      passage: true
+    },
+    orderBy: {
+      // Ensure questions from the same passage are retrieved together
+      passageId: 'asc'
+    }
   });
 
-  // Check if enough questions are available
-  if (availableQuestions.length < numQuestions) {
-    throw new Error(`Not enough questions available. Required: ${numQuestions}, Available: ${availableQuestions.length}`);
+  // Fetch standalone questions
+  const standaloneQuestions = await prisma.question.findMany({
+    where: {
+      ...whereCondition,
+      isPassage: false,
+      passageId: null
+    }
+  });
+
+  // Group passage questions by passage
+  const passageGroups: { [key: string]: Question[] } = {};
+  passageQuestions.forEach(question => {
+    const groupKey = question.passageId || 'ungrouped';
+    if (!passageGroups[groupKey]) {
+      passageGroups[groupKey] = [];
+    }
+    passageGroups[groupKey].push(question);
+  });
+
+  // Convert passage groups to an array and sort by group size (descending)
+  const sortedPassageGroups = Object.values(passageGroups)
+    .sort((a, b) => b.length - a.length);
+
+  // Calculate how many questions should be passage-based vs standalone
+  const passageQuestionCount = Math.floor(numQuestions * 0.75);
+  const standaloneQuestionCount = numQuestions - passageQuestionCount;
+  const selectedQuestions: Question[] = [];
+
+  // Select passage groups, prioritizing larger groups
+  while (
+    selectedQuestions.length < passageQuestionCount && 
+    sortedPassageGroups.length > 0
+  ) {
+    // Select the first (largest) group
+    const selectedGroup = sortedPassageGroups.shift();
+    
+    // If the group can fit entirely, add it
+    if (selectedGroup && selectedQuestions.length + selectedGroup.length <= passageQuestionCount) {
+      selectedQuestions.push(...selectedGroup);
+    }
   }
 
-  // Randomly select questions
-  const selectedQuestions = availableQuestions
-    .sort(() => 0.5 - Math.random())
-    .slice(0, numQuestions);
+  // Fill remaining slots with standalone questions
+  const remainingSlots = numQuestions - selectedQuestions.length;
+  
+  if (standaloneQuestions.length > 0) {
+    // Prefer standalone questions first
+    selectedQuestions.push(
+      ...standaloneQuestions
+        .filter(q => !selectedQuestions.includes(q))
+        .sort(() => 0.5 - Math.random())
+        .slice(0, remainingSlots)
+    );
+  }
+
+  // If not enough total questions, throw a custom error
+  const totalAvailableQuestions = selectedQuestions.length;
+  if (totalAvailableQuestions < numQuestions) {
+    throw new InsufficientQuestionsError(
+      `Not enough questions available to create a full test.`, 
+      totalAvailableQuestions, 
+      sortedPassageGroups
+    );
+  }
+
+  // Randomize the order of passage blocks and standalone questions
+  const finalSelectedQuestions: Question[] = [];
+  const passageBlocks = selectedQuestions
+    .filter(q => q.passageId !== null)
+    .reduce((acc, q) => {
+      // Use a safe string conversion for the group key
+      const groupKey = q.passageId || 'ungrouped';
+      if (!acc[groupKey]) {
+        acc[groupKey] = [];
+      }
+      acc[groupKey].push(q);
+      return acc;
+    }, {} as Record<string, Question[]>);
+  
+  const standaloneQs = selectedQuestions
+    .filter(q => q.passageId === null)
+    .sort(() => 0.5 - Math.random());
+  
+  // Combine passage blocks and standalone questions
+  const combinedItems = [
+    ...Object.values(passageBlocks),
+    ...standaloneQs
+  ].sort(() => 0.5 - Math.random());
+  
+  // Flatten and slice to ensure exact number of questions
+  combinedItems.forEach(item => {
+    if (Array.isArray(item)) {
+      finalSelectedQuestions.push(...item);
+    } else {
+      finalSelectedQuestions.push(item);
+    }
+  });
 
   // Create test with selected questions
   const test = await prisma.test.create({
@@ -55,7 +164,7 @@ export async function createTest({
       startTime: new Date(),
       remainingSeconds: 3600,
       testQuestions: {
-        create: selectedQuestions.map(question => ({
+        create: finalSelectedQuestions.slice(0, numQuestions).map(question => ({
           questionId: question.id,
           userAnswer: null
         }))
